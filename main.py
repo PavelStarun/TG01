@@ -1,26 +1,37 @@
 import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import TOKEN, WEATHER_API_KEY
 import random
 import aiohttp
+import speech_recognition as sr
+import aiofiles
+from googletrans import Translator
+from pydub import AudioSegment
+from gtts import gTTS
+import tempfile
+import os
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# Группа состояний
 class WeatherStates(StatesGroup):
     waiting_for_city = State()
 
 
+class TranslateStates(StatesGroup):
+    waiting_for_text = State()
+
+
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("Привет, я бот. Я умею показывать погоду в вашем городе. Для получения информации введите команду /help")
+    await message.answer(
+        "Привет, я бот. Я умею показывать погоду в вашем городе. Для получения информации введите команду /help")
 
 
 @dp.message(Command("help"))
@@ -33,7 +44,8 @@ async def help(message: Message):
                          "\n/photo_summer - погода летом "
                          "\n/photo_winter - погода зимой "
                          "\n/photo_spring - погода весной "
-                         "\n/photo_autumn - погода осенью ")
+                         "\n/photo_autumn - погода осенью "
+                         "\n/translate - перевести текст в аудио")
 
 
 async def fetch_weather(city: str):
@@ -128,6 +140,45 @@ async def photo_autumn(message: Message):
     ]
     rand_photo = random.choice(list)
     await message.answer_photo(rand_photo, caption="Это фотография погоды осенью")
+
+
+translator = Translator()
+
+
+@dp.message(Command("translate"))
+async def ask_text(message: Message, state: FSMContext):
+    await message.answer("Напишите текст, который хотите перевести в аудио:")
+    await state.set_state(TranslateStates.waiting_for_text)
+
+
+@dp.message(TranslateStates.waiting_for_text)
+async def text_to_audio(message: Message, state: FSMContext):
+    text = message.text
+    translated_text = translator.translate(text, dest="ru").text
+    tts = gTTS(translated_text, lang='ru')
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio:
+        tts.save(temp_audio.name)
+        temp_audio_path = temp_audio.name
+    audio_file = FSInputFile(temp_audio_path)
+    await message.answer_voice(audio_file)
+    os.remove(temp_audio_path)
+    await state.clear()
+
+
+@dp.message()
+async def handle_text(message: Message):
+    text_to_translate = message.text
+    translated_text = translator.translate(text_to_translate, src='auto', dest='en').text
+    await message.answer(translated_text)
+
+
+@dp.message(F.photo)
+async def react_photo(message: Message):
+    list = ['Ого, какая фотка!', 'Непонятно, что это такое', 'Не отправляй мне такое больше']
+    rand_answ = random.choice(list)
+    await message.answer(rand_answ)
+    await bot.download(message.photo[-1],destination=f'tmp/{message.photo[-1].file_id}.jpg')
+
 
 async def main():
     await dp.start_polling(bot)
