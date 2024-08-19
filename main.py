@@ -1,23 +1,28 @@
+import os
+import random
 import asyncio
+import aiohttp
+import aiofiles
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
-from config import TOKEN, WEATHER_API_KEY
-import random
-import aiohttp
-import speech_recognition as sr
-import aiofiles
 from googletrans import Translator
-from pydub import AudioSegment
 from gtts import gTTS
 import tempfile
-import os
+from config import TOKEN, WEATHER_API_KEY
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+# Создание необходимых директорий
+IMG_DIR = 'tmp'
+if not os.path.exists(IMG_DIR):
+    os.makedirs(IMG_DIR)
+
+translator = Translator()
 
 
 class WeatherStates(StatesGroup):
@@ -31,20 +36,19 @@ class TranslateStates(StatesGroup):
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
-        "Привет, я бот. Я умею показывать погоду в вашем городе. Для получения информации введите команду /help")
+        "Привет, я бот. Я умею: \nпоказывать погоду в вашем городе, \nпереводить текст в аудио(с переводом с русского на английский), \nприсылать фото, \nпереводить текст с русского на английский. Для получения дополнительной информации введите команду /help")
 
 
 @dp.message(Command("help"))
 async def help(message: Message):
     await message.answer("Этот бот умеет выполнять команды: "
-                         "\n/start "
-                         "\n/help "
+                         "\n/start - приветственное сообщение "
+                         "\n/help - информация о командах "
                          "\n/pogoda - Информация о погоде в вашем городе "
-                         "\n Могу показывать красивые фотографии погоды: "
                          "\n/photo_summer - погода летом "
                          "\n/photo_winter - погода зимой "
                          "\n/photo_spring - погода весной "
-                         "\n/photo_autumn - погода осенью "
+                         "\n/photo_autumn - погода осенью"
                          "\n/translate - перевести текст в аудио")
 
 
@@ -53,8 +57,7 @@ async def fetch_weather(city: str):
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
         async with session.get(url) as response:
             if response.status == 200:
-                data = await response.json()
-                return data
+                return await response.json()
             else:
                 print(f"Error fetching weather data: {response.status}")
                 return None
@@ -72,23 +75,18 @@ async def get_weather(message: Message, state: FSMContext):
     weather_data = await fetch_weather(city)
 
     if weather_data:
-        description = weather_data['weather'][0]['description']
-        temp = weather_data['main']['temp']
-        feels_like = weather_data['main']['feels_like']
-        humidity = weather_data['main']['humidity']
-        wind_speed = weather_data['wind']['speed']
-
         response_message = (
             f"Погода в городе {city}:\n"
-            f"Описание: {description}\n"
-            f"Температура: {temp}°C\n"
-            f"Ощущается как: {feels_like}°C\n"
-            f"Влажность: {humidity}%\n"
-            f"Скорость ветра: {wind_speed} м/с"
+            f"Описание: {weather_data['weather'][0]['description']}\n"
+            f"Температура: {weather_data['main']['temp']}°C\n"
+            f"Ощущается как: {weather_data['main']['feels_like']}°C\n"
+            f"Влажность: {weather_data['main']['humidity']}%\n"
+            f"Скорость ветра: {weather_data['wind']['speed']} м/с"
         )
         await message.answer(response_message)
     else:
         await message.answer("Не удалось получить данные о погоде. Проверьте название города и попробуйте снова.")
+
     await state.clear()
 
 
@@ -142,9 +140,6 @@ async def photo_autumn(message: Message):
     await message.answer_photo(rand_photo, caption="Это фотография погоды осенью")
 
 
-translator = Translator()
-
-
 @dp.message(Command("translate"))
 async def ask_text(message: Message, state: FSMContext):
     await message.answer("Напишите текст, который хотите перевести в аудио:")
@@ -165,19 +160,21 @@ async def text_to_audio(message: Message, state: FSMContext):
     await state.clear()
 
 
-@dp.message()
-async def handle_text(message: Message):
-    text_to_translate = message.text
-    translated_text = translator.translate(text_to_translate, src='auto', dest='en').text
-    await message.answer(translated_text)
-
-
 @dp.message(F.photo)
 async def react_photo(message: Message):
     list = ['Ого, какая фотка!', 'Непонятно, что это такое', 'Не отправляй мне такое больше']
     rand_answ = random.choice(list)
     await message.answer(rand_answ)
-    await bot.download(message.photo[-1],destination=f'tmp/{message.photo[-1].file_id}.jpg')
+    file_path = os.path.join(IMG_DIR, f'{message.photo[-1].file_unique_id}.jpg')
+    await bot.download(message.photo[-1], destination=file_path)
+    await message.answer(f"Фото сохранено как {file_path}")
+
+
+@dp.message()
+async def handle_text(message: Message):
+    text_to_translate = message.text
+    translated_text = translator.translate(text_to_translate, src='auto', dest='en').text
+    await message.answer(translated_text)
 
 
 async def main():
